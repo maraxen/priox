@@ -9,9 +9,15 @@ import jax.numpy as jnp
 
 from priox.geometry.transforms import compute_backbone_coordinates
 from priox.physics.constants import BOLTZMANN_KCAL
-from priox.physics.electrostatics import compute_coulomb_forces_at_backbone
+from priox.physics.electrostatics import (
+  compute_coulomb_forces_at_backbone,
+  compute_stochastic_coulomb_forces_at_backbone,
+)
 from priox.physics.projections import project_forces_onto_backbone
-from priox.physics.vdw import compute_lj_forces_at_backbone
+from priox.physics.vdw import (
+  compute_lj_forces_at_backbone,
+  compute_stochastic_lj_forces_at_backbone,
+)
 
 if TYPE_CHECKING:
   from collections.abc import Sequence
@@ -88,14 +94,22 @@ def _compute_electrostatic_features_raw(
   backbone_charges_flat = all_charges[closest_indices]
   backbone_charges = backbone_charges_flat.reshape(n_residues, 5)
 
-  forces_at_backbone = compute_coulomb_forces_at_backbone(
-    backbone_positions,
-    all_positions,
-    backbone_charges,
-    all_charges,
-    noise_scale=noise_scale,
-    key=key,
-  )
+  if key is not None:
+    forces_at_backbone = compute_stochastic_coulomb_forces_at_backbone(
+      backbone_positions,
+      all_positions,
+      backbone_charges,
+      all_charges,
+      noise_scale=noise_scale,
+      key=key,
+    )
+  else:
+    forces_at_backbone = compute_coulomb_forces_at_backbone(
+      backbone_positions,
+      all_positions,
+      backbone_charges,
+      all_charges,
+    )
 
   return project_forces_onto_backbone(
     forces_at_backbone,
@@ -176,16 +190,26 @@ def _compute_vdw_features_raw(
   backbone_sigmas = backbone_sigmas_flat.reshape(n_residues, 5)
   backbone_epsilons = backbone_epsilons_flat.reshape(n_residues, 5)
 
-  forces_at_backbone = compute_lj_forces_at_backbone(
-    backbone_positions,
-    all_positions,
-    backbone_sigmas,
-    backbone_epsilons,
-    all_sigmas,
-    all_epsilons,
-    noise_scale=noise_scale,
-    key=key,
-  )
+  if key is not None:
+    forces_at_backbone = compute_stochastic_lj_forces_at_backbone(
+      backbone_positions,
+      all_positions,
+      backbone_sigmas,
+      backbone_epsilons,
+      all_sigmas,
+      all_epsilons,
+      noise_scale=noise_scale,
+      key=key,
+    )
+  else:
+    forces_at_backbone = compute_lj_forces_at_backbone(
+      backbone_positions,
+      all_positions,
+      backbone_sigmas,
+      backbone_epsilons,
+      all_sigmas,
+      all_epsilons,
+    )
 
   return project_forces_onto_backbone(
     forces_at_backbone,

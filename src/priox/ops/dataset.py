@@ -1,8 +1,9 @@
 """Data loading utilities for protein structure data."""
 
+import dataclasses
 import logging
 import pathlib
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import IO, Any, SupportsIndex
 
 import grain.python as grain
@@ -12,6 +13,8 @@ from priox.core.containers import ProteinTuple
 from priox.io.parsing.foldcomp import (
   FoldCompDatabase,
 )
+from priox.ops import prefetch as prefetch_autotune
+from priox.ops.transforms import BatchAndCollate
 
 from .processing import frame_iterator_from_inputs
 
@@ -88,3 +91,66 @@ class ProteinDataSource(grain.RandomAccessDataSource):
       msg = f"Attempted to access index {idx}, but valid indices are 0 to {len(self) - 1}."
       raise IndexError(msg)
     return self.frames[idx]
+
+
+
+
+def create_protein_dataset(
+  inputs: Sequence[str | pathlib.Path | IO[str]],
+  batch_size: int,
+  *,
+  parse_kwargs: dict[str, Any] | None = None,
+  foldcomp_database: FoldCompDatabase | None = None,
+  ram_budget_mb: int = 1024,
+  max_workers: int | None = None,
+  max_buffer_size: int | None = None,
+  collate_kwargs: dict[str, Any] | None = None,
+  shuffle: bool = False,
+  seed: int = 0,
+) -> grain.DataLoader:
+  """Create a Grain DataLoader for protein structure data.
+
+  Args:
+      inputs: Sequence of input files/paths.
+      batch_size: Batch size.
+      parse_kwargs: Arguments for parsing (e.g. chain_id).
+      foldcomp_database: FoldComp database.
+      ram_budget_mb: RAM budget in MB for prefetching.
+      max_workers: Max workers for prefetching.
+      max_buffer_size: Max buffer size for prefetching.
+      collate_kwargs: Arguments for pad_and_collate_proteins (e.g. use_electrostatics).
+      shuffle: Whether to shuffle the data.
+      seed: Random seed for shuffling.
+
+  Returns:
+      grain.DataLoader: The data loader.
+
+  """
+  ds = ProteinDataSource(inputs, parse_kwargs, foldcomp_database)
+
+  sampler = grain.IndexSampler(
+    len(ds),
+    shuffle=shuffle,
+    seed=seed,
+    shard_options=grain.ShardOptions(shard_index=0, shard_count=1),
+  )
+
+  operations = []
+  operations.append(
+    BatchAndCollate(batch_size=batch_size, collate_kwargs=collate_kwargs or {})
+  )
+
+  config = prefetch_autotune.pick_performance_config(
+    ds,
+    ram_budget_mb=ram_budget_mb,
+    max_workers=max_workers,
+    max_buffer_size=max_buffer_size,
+  )
+
+  return grain.DataLoader(
+    data_source=ds,
+    sampler=sampler,
+    operations=operations,
+    worker_count=config.multiprocessing_options.num_workers,
+    worker_buffer_size=config.read_options.prefetch_buffer_size,
+  )

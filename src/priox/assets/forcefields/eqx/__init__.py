@@ -1,0 +1,1 @@
+"""Equinox force field serialization."""

@@ -196,8 +196,16 @@ def _find_prefetch_iter_dataset_parents(
   if isinstance(ds, prefetch.PrefetchIterDataset):
     prefetch_iter_dataset_parents.append(ds.parents[0])
     return prefetch_iter_dataset_parents
+
+  if not hasattr(ds, "parents"):
+    return [ds]
+
   for parent in ds.parents:
     prefetch_iter_dataset_parents.extend(
       _find_prefetch_iter_dataset_parents(parent),
     )
+
+  if not prefetch_iter_dataset_parents:
+    return [ds]
+
   return prefetch_iter_dataset_parents

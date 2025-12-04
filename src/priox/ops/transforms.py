@@ -4,9 +4,12 @@ This module implements `grain.transforms.Map` and `grain.IterOperation` classes
 for parsing, transforming, and batching protein data.
 """
 
+import dataclasses
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from typing import Any
 
+import grain.python as grain
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -125,14 +128,14 @@ def concatenate_proteins_for_inter_mode(elements: Sequence[ProteinTuple]) -> Pro
       warnings.warn(msg, stacklevel=2)
       raise ValueError(msg)
 
-  proteins = [Protein.from_tuple(p) for p in elements]
+  proteins = [Protein.from_tuple_numpy(p) for p in elements]
 
   structure_indices = []
   for i, protein in enumerate(proteins):
     length = protein.coordinates.shape[0]
-    structure_indices.append(jnp.full(length, i, dtype=jnp.int32))
+    structure_indices.append(np.full(length, i, dtype=np.int32))
 
-  structure_mapping = jnp.concatenate(structure_indices, axis=0)
+  structure_mapping = np.concatenate(structure_indices, axis=0)
   remapped_chain_ids = []
   chain_offset = 0
 
@@ -140,10 +143,10 @@ def concatenate_proteins_for_inter_mode(elements: Sequence[ProteinTuple]) -> Pro
     original_chains = protein.chain_index
     remapped_chains = original_chains + chain_offset
     remapped_chain_ids.append(remapped_chains)
-    chain_offset = int(jnp.max(remapped_chains)) + 1
+    chain_offset = int(np.max(remapped_chains)) + 1
 
-  chain_ids = jnp.concatenate(remapped_chain_ids, axis=0)
-  concatenated = jax.tree_util.tree_map(lambda *x: jnp.concatenate(x, axis=0), *proteins)
+  chain_ids = np.concatenate(remapped_chain_ids, axis=0)
+  concatenated = jax.tree_util.tree_map(lambda *x: np.concatenate(x, axis=0), *proteins)
   concatenated = concatenated.replace(chain_index=chain_ids, mapping=structure_mapping)
   return jax.tree_util.tree_map(lambda x: x[None, ...], concatenated)
 
@@ -218,7 +221,7 @@ def _apply_electrostatics_if_needed(
     feat = compute_electrostatic_node_features(
       p, noise_scale=noise_val, noise_mode=estat_noise_mode,
     )
-    phys_feats.append(feat)
+    phys_feats.append(np.asarray(feat))
 
   return [p._replace(physics_features=feat) for p, feat in zip(elements, phys_feats, strict=False)]
 
@@ -322,50 +325,28 @@ def _pad_protein(  # noqa: C901
       md_pads["atoms"] = md_dims["max_atoms"] - protein.charges.shape[0]
 
   def pad_fn(
-    x: jnp.ndarray | None,
+    x: np.ndarray | None,
     *,
     pad_len: int = pad_len,
     protein_len: int = protein_len,
     full_coords_len: int | None = full_coords_len,
     full_coords_pad_len: int = full_coords_pad_len,
-  ) -> jnp.ndarray | None:
+  ) -> np.ndarray | None:
     """Pad array along first dimension if it matches the protein residue count."""
     if x is None:
       return None
     if not hasattr(x, "shape") or not hasattr(x, "ndim"):
       return x
     if hasattr(x, "__array__"):
-      x = jnp.asarray(x)
+      x = np.asarray(x)
     if x.ndim == 0:
       return x
 
-    # Handle MD fields explicitly by checking if they match known MD arrays
-    # This is a bit hacky, better to match by name if tree_map passed keys.
-    # But tree_map doesn't pass keys.
-    # We can check if x is one of the MD arrays by identity? No, copies.
-    # We can check shapes?
-    # But `md_bonds` shape (N_bonds, 2) is unique?
-    # N_bonds is arbitrary.
-
-    # Better approach: Manually pad MD fields in `pad_and_collate` BEFORE calling `_stack`.
-    # Or update `_pad_protein` to handle SPECIFIC fields if we could.
-    # Since we can't easily identify fields in `pad_fn`, we should rely on `jax.tree_util.tree_map`
-    # only for standard fields, and handle MD fields separately?
-    # Or we can use `jax.tree_util.tree_map_with_path` (JAX 0.4.6+).
-    # PrxteinMPNN uses JAX.
-
-    # Let's try `tree_map_with_path` if available, or just manual padding for MD fields
-    # inside `_pad_protein` before/after tree_map.
-    # `Protein` is a dataclass. `tree_map` iterates fields.
-
-    # Let's stick to shape-based heuristics for standard fields,
-    # and manually pad MD fields in the wrapper `_pad_protein`.
-
     if full_coords_len is not None and x.shape[0] == full_coords_len:
-      return jnp.pad(x, ((0, full_coords_pad_len),) + ((0, 0),) * (x.ndim - 1))
+      return np.pad(x, ((0, full_coords_pad_len),) + ((0, 0),) * (x.ndim - 1))
 
     if x.shape[0] == protein_len:
-      return jnp.pad(x, ((0, pad_len),) + ((0, 0),) * (x.ndim - 1))
+      return np.pad(x, ((0, pad_len),) + ((0, 0),) * (x.ndim - 1))
 
     return x
 
@@ -373,13 +354,12 @@ def _pad_protein(  # noqa: C901
   padded_protein = jax.tree_util.tree_map(pad_fn, protein)
 
   # Manually pad MD fields if present
-  # Manually pad MD fields if present
   if md_dims:
-    def pad_array(arr: jnp.ndarray | None, pad_amt: int) -> jnp.ndarray | None:
+    def pad_array(arr: np.ndarray | None, pad_amt: int) -> np.ndarray | None:
       if arr is None:
           return None
       pads = [(0, pad_amt)] + [(0, 0)] * (arr.ndim - 1)
-      return jnp.pad(arr, pads)
+      return np.pad(arr, pads)
 
     # Bonds
     if padded_protein.md_bonds is not None:
@@ -393,8 +373,6 @@ def _pad_protein(  # noqa: C901
       p_params = pad_array(padded_protein.md_angle_params, md_pads.get("angles", 0))
       padded_protein = padded_protein.replace(md_angles=p_angles, md_angle_params=p_params)
 
-
-
     # Exclusion mask (N_atoms, N_atoms)
     if padded_protein.md_exclusion_mask is not None:
       # Pad both dims
@@ -402,7 +380,7 @@ def _pad_protein(  # noqa: C901
       target = md_dims["max_atoms"]
       amt = target - curr
       if amt > 0:
-        mask = jnp.pad(
+        mask = np.pad(
             padded_protein.md_exclusion_mask,
             ((0, amt), (0, amt)),
             constant_values=False,
@@ -425,7 +403,7 @@ def _stack_padded_proteins(
 
   """
 
-  def stack_fn(*arrays: jnp.ndarray | None) -> jnp.ndarray | None:
+  def stack_fn(*arrays: np.ndarray | None) -> np.ndarray | None:
     """Stack arrays, handling None values and scalars."""
     non_none = [a for a in arrays if a is not None]
     if not non_none:
@@ -435,7 +413,7 @@ def _stack_padded_proteins(
       return first
     if not all(hasattr(a, "shape") and a.shape == first.shape for a in non_none):
       return None
-    return jnp.stack(non_none, axis=0)
+    return np.stack(non_none, axis=0)
 
   return jax.tree_util.tree_map(stack_fn, *padded_proteins)
 
@@ -513,7 +491,7 @@ def pad_and_collate_proteins(
       use_md=(backbone_noise_mode == "md"),
   )
 
-  proteins = [Protein.from_tuple(p) for p in elements]
+  proteins = [Protein.from_tuple_numpy(p) for p in elements]
 
   # Use fixed max_length if provided, otherwise use max in batch
   pad_len = max_length if max_length is not None else max(p.coordinates.shape[0] for p in proteins)
@@ -535,3 +513,23 @@ def pad_and_collate_proteins(
 
   padded_proteins = [_pad_protein(p, pad_len, md_dims) for p in proteins]
   return _stack_padded_proteins(padded_proteins)
+
+
+@dataclasses.dataclass
+class BatchAndCollate(grain.Operation):
+  """Grain operation to batch and collate proteins."""
+
+  batch_size: int
+  drop_remainder: bool = False
+  collate_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+  def __call__(self, iterator: Iterator[ProteinTuple]) -> Iterator[Protein]:
+    """Batch and collate items from the iterator."""
+    batch = []
+    for item in iterator:
+      batch.append(item)
+      if len(batch) == self.batch_size:
+        yield pad_and_collate_proteins(batch, **self.collate_kwargs)
+        batch = []
+    if batch and not self.drop_remainder:
+      yield pad_and_collate_proteins(batch, **self.collate_kwargs)

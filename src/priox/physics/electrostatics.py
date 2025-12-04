@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import partial
 
+import chex
 import jax
 import jax.numpy as jnp
 from jax_md import space
@@ -33,6 +34,9 @@ def compute_pairwise_displacements(
       5.0
 
   """
+  chex.assert_shape(positions1, (None, 3))
+  chex.assert_shape(positions2, (None, 3))
+
   displacement_fn, _ = space.free()
   displacements = jax.vmap(
     lambda r1: jax.vmap(lambda r2: displacement_fn(r2, r1))(positions2),
@@ -66,6 +70,11 @@ def compute_coulomb_potential(
       Scalar potential energy in kcal/mol
 
   """
+  chex.assert_shape(target_positions, (None, 3))
+  chex.assert_shape(source_positions, (None, 3))
+  chex.assert_shape(target_charges, (None,))
+  chex.assert_shape(source_charges, (None,))
+
   _, distances = compute_pairwise_displacements(target_positions, source_positions)
   distances_safe = jnp.maximum(distances, min_distance)
 
@@ -103,6 +112,11 @@ def compute_coulomb_forces_from_positions(
       Force vectors at target positions, shape (n, 3) in kcal/mol/Å
 
   """
+  chex.assert_shape(target_positions, (None, 3))
+  chex.assert_shape(source_positions, (None, 3))
+  chex.assert_shape(target_charges, (None,))
+  chex.assert_shape(source_charges, (None,))
+
   grad_fn = jax.grad(
     lambda pos: compute_coulomb_potential(
       pos,
@@ -155,6 +169,11 @@ def compute_coulomb_forces(
       True
 
   """
+  chex.assert_shape(displacements, (None, None, 3))
+  chex.assert_rank(distances, 2)
+  chex.assert_shape(target_charges, (None,))
+  chex.assert_shape(source_charges, (None,))
+
   distances_safe = jnp.maximum(distances, min_distance)
 
   force_magnitudes = (
@@ -219,6 +238,11 @@ def compute_coulomb_forces_at_backbone(
       (10, 5, 3)  # Force vectors at N, CA, C, O, CB/H for each residue
 
   """
+  chex.assert_shape(backbone_positions, (None, 5, 3))
+  chex.assert_shape(all_atom_positions, (None, 3))
+  chex.assert_shape(backbone_charges, (None, 5))
+  chex.assert_shape(all_atom_charges, (None,))
+
   n_residues = backbone_positions.shape[0]
 
   # Flatten to (n_residues * 5, 3) for vectorized computation
